@@ -4,11 +4,6 @@ from django.contrib.auth import login, logout
 from django.conf import settings
 from django.shortcuts import redirect
 from django.contrib.auth import logout
-from django.contrib.auth import get_user_model
-from django.utils.translation import ugettext as _
-from rest_framework import exceptions
-from rest_framework_jwt.authentication import JSONWebTokenAuthentication
-from rest_framework_jwt.settings import api_settings
 
 import jwt
 import base64
@@ -61,11 +56,11 @@ def validate_jwt(request):
 
         except jwt.InvalidTokenError as err:
             logger.error(str(err))
-            logger.error("Invalid JWT Token.")
+            logger.error("[PYAUTH0JWT][DEBUG][validate_jwt] - Invalid JWT Token.")
             payload = None
         except jwt.ExpiredSignatureError as err:
             logger.error(str(err))
-            logger.error("JWT Expired.")
+            logger.error("[PYAUTH0JWT][DEBUG][validate_jwt] - JWT Expired.")
             payload = None
     else:
         payload = None
@@ -90,7 +85,7 @@ def jwt_login(request, jwt_payload):
     if user:
         login(request, user)
     else:
-        logger.error("Could not log user in.")
+        logger.error("[PYAUTH0JWT][DEBUG][jwt_login] - Could not log user in.")
 
     return request.user.is_authenticated()
 
@@ -111,12 +106,12 @@ def logout_redirect(request):
 class Auth0Authentication(object):
 
     def authenticate(self, **token_dictionary):
-        logger.debug("Attempting to Authenticate User - " + token_dictionary["email"])
+        logger.debug("[PYAUTH0JWT][DEBUG][authenticate] - Attempting to Authenticate User.")
 
         try:
             user = User.objects.get(username=token_dictionary["email"])
         except User.DoesNotExist:
-            logger.debug("User not found, creating.")
+            logger.debug("[PYAUTH0JWT][DEBUG][authenticate] - User not found, creating.")
 
             user = User(username=token_dictionary["email"], email=token_dictionary["email"])
             user.save()
@@ -128,33 +123,4 @@ class Auth0Authentication(object):
         except User.DoesNotExist:
             return None
 
-jwt_get_username_from_payload = api_settings.JWT_PAYLOAD_GET_USERNAME_HANDLER
-
-
-class Auth0JSONWebTokenAuthentication(JSONWebTokenAuthentication):
-
-    def authenticate_credentials(self, payload):
-        """
-        Returns an active user that matches the payload's user id and email.
-        """
-        User = get_user_model()
-        username = jwt_get_username_from_payload(payload)
-
-        if not username:
-            msg = _('Invalid payload.')
-            raise exceptions.AuthenticationFailed(msg)
-
-        try:
-            user = User.objects.get_by_natural_key(username)
-        except User.DoesNotExist:
-            print("User not found, creating.")
-
-            user = User(username=username, email=username)
-            user.save()
-
-        if not user.is_active:
-            msg = _('User account is disabled.')
-            raise exceptions.AuthenticationFailed(msg)
-
-        return user
 
