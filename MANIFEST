@@ -2,3 +2,4 @@
 setup.py
 pyauth0jwt/__init__.py
 pyauth0jwt/auth0authenticate.py
+pyauth0jwt/settings.py
