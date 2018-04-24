@@ -152,9 +152,10 @@ def validate_rs256_jwt(jwt_string):
 
     rsa_pub_key = retrieve_public_key(jwt_string)
     payload = None
-    jwk_key = jwk.JWK(**rsa_pub_key)
 
     if rsa_pub_key:
+        jwk_key = jwk.JWK(**rsa_pub_key)
+
         # Attempt to validate the JWT (Checks both expiry and signature)
         try:
             payload = jwt.decode(jwt_string,
