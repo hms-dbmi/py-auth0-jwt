@@ -116,23 +116,29 @@ def validate_request(request):
 
 def retrieve_public_key(jwt_string):
 
-    jwks = get_public_keys_from_auth0()
+    try:
+        jwks = get_public_keys_from_auth0()
 
-    unverified_header = jwt.get_unverified_header(str(jwt_string))
+        unverified_header = jwt.get_unverified_header(str(jwt_string))
 
-    rsa_key = {}
+        rsa_key = {}
 
-    for key in jwks["keys"]:
-        if key["kid"] == unverified_header["kid"]:
-            rsa_key = {
-                "kty": key["kty"],
-                "kid": key["kid"],
-                "use": key["use"],
-                "n": key["n"],
-                "e": key["e"]
-            }
+        for key in jwks["keys"]:
+            if key["kid"] == unverified_header["kid"]:
+                rsa_key = {
+                    "kty": key["kty"],
+                    "kid": key["kid"],
+                    "use": key["use"],
+                    "n": key["n"],
+                    "e": key["e"]
+                }
 
-    return rsa_key
+        return rsa_key
+    except KeyError as e:
+        logger.debug('Could not compare keys, probably old HS256 session')
+        logger.exception(e)
+
+    return None
 
 
 def get_public_keys_from_auth0():
