@@ -6,6 +6,8 @@ from django.shortcuts import redirect
 from django.contrib.auth import logout
 
 import jwt
+from furl import furl
+import json
 import base64
 import logging
 import requests
@@ -152,9 +154,10 @@ def validate_rs256_jwt(jwt_string):
 
     rsa_pub_key = retrieve_public_key(jwt_string)
     payload = None
-    jwk_key = jwk.JWK(**rsa_pub_key)
 
     if rsa_pub_key:
+        jwk_key = jwk.JWK(**rsa_pub_key)
+
         # Attempt to validate the JWT (Checks both expiry and signature)
         try:
             payload = jwt.decode(jwt_string,
@@ -204,8 +207,23 @@ def logout_redirect(request):
     :return: The response object that takes the user to the login page. 'next' parameter set to bring them back to their intended page.
     """
     logout(request)
-    response = redirect(settings.AUTHENTICATION_LOGIN_URL + "?next=" + request.build_absolute_uri())
+
+    # Build the URL
+    login_url = furl(settings.AUTHENTICATION_LOGIN_URL)
+    login_url.query.params.add('next', request.build_absolute_uri())
+
+    # Check for branding
+    if hasattr(settings, 'SCIAUTH_BRANDING'):
+        logger.debug('SciAuth branding passed')
+
+        # Encode it and pass it
+        branding = base64.urlsafe_b64encode(json.dumps(settings.SCIAUTH_BRANDING).encode('utf-8')).decode('utf-8')
+        login_url.query.params.add('branding', branding)
+
+    # Set the URL and purge cookies
+    response = redirect(login_url.url)
     response.delete_cookie('DBMI_JWT', domain=settings.COOKIE_DOMAIN)
+    logger.debug('Redirecting to: {}'.format(login_url.url))
 
     return response
 
