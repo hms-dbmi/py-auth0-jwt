@@ -51,8 +51,8 @@ def user_auth_and_jwt(function):
         # User is both logged into this app and via JWT.
         if request.user.is_authenticated() and jwt_payload is not None:
 
-            # Ensure the email matches
-            if request.user.username != jwt_payload['email']:
+            # Ensure the email matches (without case sensitivity)
+            if request.user.username.lower() != jwt_payload['email'].lower():
                 logger.warning('Django and JWT email mismatch! Log them out and redirect to log back in')
                 return logout_redirect(request)
 
