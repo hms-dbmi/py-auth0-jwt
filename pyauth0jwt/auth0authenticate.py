@@ -158,21 +158,34 @@ def validate_rs256_jwt(jwt_string):
     if rsa_pub_key:
         jwk_key = jwk.JWK(**rsa_pub_key)
 
+        # Determine which Auth0 Client ID (aud) this JWT pertains to.
+        try:
+            auth0_client_id = str(jwt.decode(jwt_string, verify=False)['aud'])
+        except Exception as e:
+            logger.error('[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - Failed to get the aud from jwt payload')
+            return None
+
+        # Check that the Client ID is in the allowed list of Auth0 Client IDs for this application
+        allowed_auth0_client_id_list = json.loads(settings.AUTH0_CLIENT_ID_LIST)
+        if auth0_client_id not in allowed_auth0_client_id_list:
+            logger.error('[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - Auth0 Client ID not allowed')
+            return None
+
         # Attempt to validate the JWT (Checks both expiry and signature)
         try:
             payload = jwt.decode(jwt_string,
                                  jwk_key.export_to_pem(private_key=False),
                                  algorithms=['RS256'],
                                  leeway=120,
-                                 audience=settings.AUTH0_CLIENT_ID)
+                                 audience=auth0_client_id)
 
         except jwt.InvalidTokenError as err:
             logger.error(str(err))
-            logger.error("[PYAUTH0JWT][DEBUG][validate_jwt] - Invalid JWT Token.")
+            logger.error("[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - Invalid JWT Token.")
             payload = None
         except jwt.ExpiredSignatureError as err:
             logger.error(str(err))
-            logger.error("[PYAUTH0JWT][DEBUG][validate_jwt] - JWT Expired.")
+            logger.error("[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - JWT Expired.")
             payload = None
 
     return payload
