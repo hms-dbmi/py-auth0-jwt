@@ -166,7 +166,7 @@ def validate_rs256_jwt(jwt_string):
             return None
 
         # Check that the Client ID is in the allowed list of Auth0 Client IDs for this application
-        allowed_auth0_client_id_list = json.loads(settings.AUTH0_CLIENT_ID_LIST)
+        allowed_auth0_client_id_list = settings.AUTH0_CLIENT_ID_LIST
         if auth0_client_id not in allowed_auth0_client_id_list:
             logger.error('[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - Auth0 Client ID not allowed')
             return None
