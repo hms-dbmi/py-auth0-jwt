@@ -88,18 +88,17 @@ def public_user_auth_and_jwt(function):
         # Validates the JWT and returns its payload if valid.
         jwt_payload = validate_request(request)
 
-        # User is both logged into this app and via JWT.
-        if request.user.is_authenticated() and jwt_payload is not None:
-            return function(request, *args, **kwargs)
-        # User has a JWT session open but not a Django session. Start a Django session and continue the request.
-        elif not request.user.is_authenticated() and jwt_payload is not None:
-            if jwt_login(request, jwt_payload):
-                return function(request, *args, **kwargs)
-            else:
-                return function(request, *args, **kwargs)
-        # User isn't logged in but that's okay.
-        else:
-            return function(request, *args, **kwargs)
+        # If user is logged in, make sure they have a valid JWT
+        if request.user.is_authenticated() and jwt_payload is None:
+            logger.warning('User ' + request.user.email + ' is authenticated but does not have a valid JWT. Logging them out.')
+            return logout_redirect(request)
+
+        # User has a JWT session open but not a Django session. Try to start a Django session and continue the request.
+        if not request.user.is_authenticated() and jwt_payload is not None:
+            jwt_login(request, jwt_payload)
+
+        return function(request, *args, **kwargs)
+
     wrap.__doc__ = function.__doc__
     wrap.__name__ = function.__name__
     return wrap
@@ -241,13 +240,13 @@ def validate_jwt(request):
                                  leeway=120,
                                  audience=settings.AUTH0_CLIENT_ID)
 
-        except jwt.InvalidTokenError as err:
-            logger.error(str(err))
-            logger.error("[PYAUTH0JWT][DEBUG][validate_jwt] - Invalid JWT Token.")
-            payload = None
         except jwt.ExpiredSignatureError as err:
             logger.error(str(err))
             logger.error("[PYAUTH0JWT][DEBUG][validate_jwt] - JWT Expired.")
+            payload = None
+        except jwt.InvalidTokenError as err:
+            logger.error(str(err))
+            logger.error("[PYAUTH0JWT][DEBUG][validate_jwt] - Invalid JWT Token.")
             payload = None
     else:
         payload = None
@@ -432,13 +431,13 @@ def validate_rs256_jwt(jwt_string):
                                  leeway=120,
                                  audience=auth0_client_id)
 
-        except jwt.InvalidTokenError as err:
-            logger.error(str(err))
-            logger.error("[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - Invalid JWT Token.")
-            payload = None
         except jwt.ExpiredSignatureError as err:
             logger.error(str(err))
             logger.error("[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - JWT Expired.")
+            payload = None
+        except jwt.InvalidTokenError as err:
+            logger.error(str(err))
+            logger.error("[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - Invalid JWT Token.")
             payload = None
 
     return payload
