@@ -59,14 +59,14 @@ def jwt_and_manage(item):
                     logger.warning('{} Failed MANAGE permission on {}'.format(email, item))
 
                     # Forbid if nothing else
-                    return HttpResponseForbidden("You do not have permissions to access this item")
+                    raise PermissionDenied
 
                 except (json.JSONDecodeError, requests.HTTPError) as e:
                     logger.exception(e)
 
                     # Figure out how to handle errors, either access denied or server error. Maybe
                     # environment dependent?
-                    return HttpResponseServerError("Application error")
+                    raise e
 
             else:
                 logger.debug('Missing/invalid JWT, sending to login')
