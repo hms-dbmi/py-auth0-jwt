@@ -12,6 +12,7 @@ from django.contrib.auth import login
 from django.conf import settings
 from django.shortcuts import redirect
 from django.contrib.auth import logout
+from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseForbidden, HttpResponseServerError
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ def jwt_and_manage(item):
             # User has a valid JWT from SciAuth
             if jwt_payload is not None:
 
+                content = None
                 try:
                     # Get the email
                     email = jwt_payload.get('email')
@@ -44,6 +46,7 @@ def jwt_and_manage(item):
                     # Confirm user is a manager of the given project
                     permissions_url = sciauthz_permission_url(item, email)
                     response = requests.get(permissions_url, headers=sciauthz_headers(request), verify=verify_requests())
+                    content = response.content
                     response.raise_for_status()
 
                     # Parse permissions
@@ -55,18 +58,19 @@ def jwt_and_manage(item):
                                 return function(request, *args, **kwargs)
 
                     # Possibly store these elsewhere for records
-                    # TODO: Figure out a better way to flag failed access attempts
-                    logger.warning('{} Failed MANAGE permission on {}'.format(email, item))
+                    logger.warning('{} Failed MANAGE permission on {}'.format(email, item),
+                                   extra={'jwt': jwt_payload, 'authorizations': response.json()})
 
-                    # Forbid if nothing else
-                    raise PermissionDenied
+                except requests.HTTPError as e:
+                    logger.exception('Checking permissions error: {}'.format(e), exc_info=True,
+                                     extra={'jwt': jwt_payload, 'content': content})
 
-                except (json.JSONDecodeError, requests.HTTPError) as e:
-                    logger.exception(e)
+                except Exception as e:
+                    logger.exception('Checking permissions error: {}'.format(e), exc_info=True,
+                                     extra={'jwt': jwt_payload})
 
-                    # Figure out how to handle errors, either access denied or server error. Maybe
-                    # environment dependent?
-                    raise e
+                # Forbid access as a default measure
+                raise PermissionDenied
 
             else:
                 logger.debug('Missing/invalid JWT, sending to login')
@@ -90,7 +94,7 @@ def public_user_auth_and_jwt(function):
 
         # If user is logged in, make sure they have a valid JWT
         if request.user.is_authenticated() and jwt_payload is None:
-            logger.warning('User ' + request.user.email + ' is authenticated but does not have a valid JWT. Logging them out.')
+            logger.debug('User ' + request.user.email + ' is authenticated but does not have a valid JWT. Logging them out.')
             return logout_redirect(request)
 
         # User has a JWT session open but not a Django session. Try to start a Django session and continue the request.
@@ -124,7 +128,7 @@ def user_auth_and_jwt(function):
 
             # Ensure the email matches (without case sensitivity)
             if request.user.username.lower() != jwt_payload['email'].lower():
-                logger.warning('Django and JWT email mismatch! Log them out and redirect to log back in')
+                logger.debug('Django and JWT email mismatch! Log them out and redirect to log back in')
                 return logout_redirect(request)
 
             return function(request, *args, **kwargs)
@@ -240,18 +244,19 @@ def validate_jwt(request):
                                  leeway=120,
                                  audience=settings.AUTH0_CLIENT_ID)
 
-        except jwt.ExpiredSignatureError as err:
-            logger.error(str(err))
-            logger.error("[PYAUTH0JWT][DEBUG][validate_jwt] - JWT Expired.")
-            payload = None
-        except jwt.InvalidTokenError as err:
-            logger.error(str(err))
-            logger.error("[PYAUTH0JWT][DEBUG][validate_jwt] - Invalid JWT Token.")
-            payload = None
-    else:
-        payload = None
+            return payload
 
-    return payload
+        except jwt.ExpiredSignatureError:
+            logger.debug("JWT Expired.")
+
+        except jwt.InvalidTokenError:
+            logger.debug("Invalid JWT Token.")
+
+        except Exception as e:
+            logger.exception('Unexpected validation error: {}'.format(e), exc_info=True,
+                             extra={'jwt': jwt_string})
+
+    return None
 
 
 def validate_request(request):
@@ -285,6 +290,8 @@ def get_public_keys_from_auth0(refresh=False):
     if refresh:
         delattr(settings, 'AUTH0_JWKS')
 
+    jwks = None
+    content = None
     try:
         # Look in settings
         if hasattr(settings, 'AUTH0_JWKS'):
@@ -299,6 +306,7 @@ def get_public_keys_from_auth0(refresh=False):
 
             # Make the request
             response = requests.get("https://" + settings.AUTH0_DOMAIN + "/.well-known/jwks.json")
+            content = response.content
             response.raise_for_status()
 
             # Parse it
@@ -310,13 +318,20 @@ def get_public_keys_from_auth0(refresh=False):
             return jwks
 
     except KeyError as e:
-        logging.exception(e)
+        logging.exception('Parsing public keys failed: {}'.format(e), exc_info=True,
+                          extra={'domain': settings.AUTH0_DOMAIN, 'jwks': jwks})
 
     except json.JSONDecodeError as e:
-        logging.exception(e)
+        logging.exception('Parsing public keys failed: {}'.format(e), exc_info=True,
+                          extra={'domain': settings.AUTH0_DOMAIN, 'jwks': jwks})
 
     except requests.HTTPError as e:
-        logging.exception(e)
+        logging.exception('Gettting public keys failed: {}'.format(e), exc_info=True,
+                          extra={'domain': settings.AUTH0_DOMAIN, 'content': content})
+
+    except Exception as e:
+        logging.exception('Unexpected public key error: {}'.format(e), exc_info=True,
+                          extra={'domain': settings.AUTH0_DOMAIN, 'content': content})
 
     return None
 
@@ -359,13 +374,13 @@ def retrieve_public_key(jwt_string):
             # Try it again
             rsa_key = get_rsa_from_jwks(jwks, unverified_header['kid'])
             if not rsa_key:
-                logger.error('No matching key found despite refresh, failing')
+                logger.warning('No matching key found despite refresh, failing: {}'.format(unverified_header.get('kid')))
 
         return rsa_key
 
     except KeyError as e:
-        logger.debug('Could not compare keys, probably old HS256 session')
-        logger.exception(e)
+        logger.exception('Comparing public key failed: {}'.format(e), exc_info=True,
+                         extra={'jwt': jwt_string, 'jwks': jwks})
 
     return None
 
@@ -414,13 +429,15 @@ def validate_rs256_jwt(jwt_string):
         try:
             auth0_client_id = str(jwt.decode(jwt_string, verify=False)['aud'])
         except Exception as e:
-            logger.error('[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - Failed to get the aud from jwt payload')
+            logger.exception('Failed to get the aud from jwt payload: {}'.format(e), exc_info=True,
+                             extra={'jwt': jwt_string})
             return None
 
         # Check that the Client ID is in the allowed list of Auth0 Client IDs for this application
         allowed_auth0_client_id_list = settings.AUTH0_CLIENT_ID_LIST
         if auth0_client_id not in allowed_auth0_client_id_list:
-            logger.error('[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - Auth0 Client ID not allowed')
+            logger.warning('Auth0 client not allowed: {}'.format(auth0_client_id),
+                           extra={'jwt': jwt_string})
             return None
 
         # Attempt to validate the JWT (Checks both expiry and signature)
@@ -430,17 +447,19 @@ def validate_rs256_jwt(jwt_string):
                                  algorithms=['RS256'],
                                  leeway=120,
                                  audience=auth0_client_id)
+            return payload
 
-        except jwt.ExpiredSignatureError as err:
-            logger.error(str(err))
-            logger.error("[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - JWT Expired.")
-            payload = None
-        except jwt.InvalidTokenError as err:
-            logger.error(str(err))
-            logger.error("[PYAUTH0JWT][DEBUG][validate_rs256_jwt] - Invalid JWT Token.")
-            payload = None
+        except jwt.ExpiredSignatureError:
+            logger.debug("JWT Expired.")
 
-    return payload
+        except jwt.InvalidTokenError:
+            logger.debug("Invalid JWT Token.")
+
+        except Exception as e:
+            logger.exception('Unexpected validation error: {}'.format(e), exc_info=True,
+                             extra={'jwt': jwt_string, 'auth0_client_id': auth0_client_id})
+
+    return None
 
 
 def jwt_login(request, jwt_payload):
@@ -451,7 +470,7 @@ def jwt_login(request, jwt_payload):
     :return:
     """
 
-    logger.debug("[PYAUTH0JWT][DEBUG][jwt_login] - Logging user in via JWT. Is Authenticated? " + str(request.user.is_authenticated()))
+    logger.debug("Logging user in via JWT. Is Authenticated? " + str(request.user.is_authenticated()))
 
     request.session['profile'] = jwt_payload
 
@@ -460,7 +479,7 @@ def jwt_login(request, jwt_payload):
     if user:
         login(request, user)
     else:
-        logger.error("[PYAUTH0JWT][DEBUG][jwt_login] - Could not log user in.")
+        logger.debug("Could not log user in.")
 
     return request.user.is_authenticated()
 
@@ -496,12 +515,12 @@ def logout_redirect(request):
 class Auth0Authentication(object):
 
     def authenticate(self, **token_dictionary):
-        logger.debug("[PYAUTH0JWT][DEBUG][authenticate] - Attempting to Authenticate User.")
+        logger.debug("Attempting to Authenticate User.")
 
         try:
             user = User.objects.get(username=token_dictionary["email"])
         except User.DoesNotExist:
-            logger.debug("[PYAUTH0JWT][DEBUG][authenticate] - User not found, creating.")
+            logger.debug("User not found, creating.")
 
             user = User(username=token_dictionary["email"], email=token_dictionary["email"])
             user.save()
