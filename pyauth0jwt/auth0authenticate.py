@@ -204,7 +204,7 @@ def verify_requests():
         return settings.VERIFY_REQUESTS
 
     # Log it
-    logger.warning('VERIFY_REQUESTS setting is missing, defaulting to "True"')
+    logger.debug('VERIFY_REQUESTS setting is missing, defaulting to "True"')
 
     return True
 
@@ -378,8 +378,15 @@ def retrieve_public_key(jwt_string):
 
         return rsa_key
 
+    except jwt.exceptions.DecodeError as e:
+        logger.debug('Invalid JWT used: {}'.format(e))
+
     except KeyError as e:
         logger.exception('Comparing public key failed: {}'.format(e), exc_info=True,
+                         extra={'jwt': jwt_string, 'jwks': jwks})
+
+    except Exception as e:
+        logger.exception('Unexpected public key error: {}'.format(e), exc_info=True,
                          extra={'jwt': jwt_string, 'jwks': jwks})
 
     return None
