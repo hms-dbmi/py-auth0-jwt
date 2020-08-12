@@ -5,6 +5,7 @@ import base64
 import logging
 import requests
 import jwcrypto.jwk as jwk
+from functools import wraps
 
 from django.contrib.auth.models import User
 from django.contrib import auth as django_auth
@@ -13,7 +14,6 @@ from django.conf import settings
 from django.shortcuts import redirect
 from django.contrib.auth import logout
 from django.core.exceptions import PermissionDenied
-from django.http import HttpResponseForbidden, HttpResponseServerError
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ def jwt_and_manage(item):
 
     def real_decorator(function):
 
+        @wraps(function)
         def wrap(request, *args, **kwargs):
 
             # Validates the JWT and returns its payload if valid.
@@ -76,14 +77,14 @@ def jwt_and_manage(item):
                 logger.debug('Missing/invalid JWT, sending to login')
                 return logout_redirect(request)
 
-        wrap.__doc__ = function.__doc__
-        wrap.__name__ = function.__name__
         return wrap
 
     return real_decorator
 
 
 def public_user_auth_and_jwt(function):
+
+    @wraps(function)
     def wrap(request, *args, **kwargs):
         """
         Here we see if the user is logged in but let them stay on the page if they aren't.
@@ -93,18 +94,16 @@ def public_user_auth_and_jwt(function):
         jwt_payload = validate_request(request)
 
         # If user is logged in, make sure they have a valid JWT
-        if request.user.is_authenticated() and jwt_payload is None:
+        if request.user.is_authenticated and jwt_payload is None:
             logger.debug('User ' + request.user.email + ' is authenticated but does not have a valid JWT. Logging them out.')
             return logout_redirect(request)
 
         # User has a JWT session open but not a Django session. Try to start a Django session and continue the request.
-        if not request.user.is_authenticated() and jwt_payload is not None:
+        if not request.user.is_authenticated and jwt_payload is not None:
             jwt_login(request, jwt_payload)
 
         return function(request, *args, **kwargs)
 
-    wrap.__doc__ = function.__doc__
-    wrap.__name__ = function.__name__
     return wrap
 
 
@@ -118,13 +117,14 @@ def user_auth_and_jwt(function):
     :param function: The protected method
     :return: decorator
     '''
+    @wraps(function)
     def wrap(request, *args, **kwargs):
 
         # Validates the JWT and returns its payload if valid.
         jwt_payload = validate_request(request)
 
         # User is both logged into this app and via JWT.
-        if request.user.is_authenticated() and jwt_payload is not None:
+        if request.user.is_authenticated and jwt_payload is not None:
 
             # Ensure the email matches (without case sensitivity)
             if request.user.username.lower() != jwt_payload['email'].lower():
@@ -133,7 +133,7 @@ def user_auth_and_jwt(function):
 
             return function(request, *args, **kwargs)
         # User has a JWT session open but not a Django session. Start a Django session and continue the request.
-        elif not request.user.is_authenticated() and jwt_payload is not None:
+        elif not request.user.is_authenticated and jwt_payload is not None:
             if jwt_login(request, jwt_payload):
                 return function(request, *args, **kwargs)
             else:
@@ -141,8 +141,7 @@ def user_auth_and_jwt(function):
         # User doesn't pass muster, throw them to the login app.
         else:
             return logout_redirect(request)
-    wrap.__doc__ = function.__doc__
-    wrap.__name__ = function.__name__
+
     return wrap
 
 
@@ -154,6 +153,7 @@ def dbmi_jwt(function):
     :return:
     :rtype:
     '''
+    @wraps(function)
     def wrap(request, *args, **kwargs):
 
         # Validates the JWT and returns its payload if valid.
@@ -167,8 +167,6 @@ def dbmi_jwt(function):
             logger.debug('Missing/invalid JWT, sending to login')
             return logout_redirect(request)
 
-    wrap.__doc__ = function.__doc__
-    wrap.__name__ = function.__name__
     return wrap
 
 
@@ -477,7 +475,7 @@ def jwt_login(request, jwt_payload):
     :return:
     """
 
-    logger.debug("Logging user in via JWT. Is Authenticated? " + str(request.user.is_authenticated()))
+    logger.debug("Logging user in via JWT. Is Authenticated? " + str(request.user.is_authenticated))
 
     request.session['profile'] = jwt_payload
 
@@ -488,7 +486,7 @@ def jwt_login(request, jwt_payload):
     else:
         logger.debug("Could not log user in.")
 
-    return request.user.is_authenticated()
+    return request.user.is_authenticated
 
 
 def logout_redirect(request):
@@ -521,13 +519,13 @@ def logout_redirect(request):
 
 class Auth0Authentication(object):
 
-    def authenticate(self, **token_dictionary):
-        logger.debug("Attempting to Authenticate User.")
+    def authenticate(self, request, **token_dictionary):
+        logger.debug("Authenticate User: {}/{}".format(token_dictionary.get('sub'), token_dictionary.get('email')))
 
         try:
             user = User.objects.get(username=token_dictionary["email"])
         except User.DoesNotExist:
-            logger.debug("User not found, creating.")
+            logger.debug("User not found, creating: {}".format(token_dictionary.get('email')))
 
             user = User(username=token_dictionary["email"], email=token_dictionary["email"])
             user.save()
